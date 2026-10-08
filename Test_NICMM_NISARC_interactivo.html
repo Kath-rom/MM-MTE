@@ -74,6 +74,23 @@ button{border:0;border-radius:10px;padding:12px 18px;font-size:15px;font-weight:
 .reviewActions{display:flex;justify-content:space-between;gap:10px;margin-top:24px}
 @media(max-width:650px){.examGrid{grid-template-columns:repeat(5,minmax(38px,1fr))}.startButtons{flex-direction:column}.startButtons button{width:100%}.reviewActions{flex-direction:column}}
 
+.examSheet{margin-top:18px}
+.examSheetIntro{padding:14px 16px;background:#f7f8fa;border:1px solid var(--border);border-radius:12px;margin-bottom:18px;line-height:1.5}
+.examSheetTitle{font-size:18px;font-weight:800;margin:0 0 6px}
+.examSheetQuestions{display:grid;gap:18px}
+.examSheetQuestion{background:#fff;border:1px solid var(--border);border-radius:14px;padding:20px;box-shadow:0 4px 16px rgba(0,0,0,.05)}
+.examSheetQuestion .qnum{margin-bottom:7px}
+.examSheetQuestion .question{font-size:18px;margin-bottom:16px}
+.examSheetQuestion .qimages{margin-bottom:16px}
+.examSheetQuestion .options{gap:9px}
+.examSheetActions{display:flex;justify-content:flex-end;margin-top:22px}
+.examInlineReview{margin-top:24px;border-top:2px solid var(--border);padding-top:22px}
+.examInlineReview .reviewTitle{font-size:18px;font-weight:800;margin-bottom:14px}
+.examInlineReview .reviewMeta{color:var(--muted);font-size:14px;font-weight:700;margin-bottom:10px}
+.examInlineReview .reviewClose{float:right}
+@media(max-width:650px){.examSheetQuestion{padding:16px}.examSheetQuestion .question{font-size:17px}.examSheetActions{justify-content:stretch}.examSheetActions button{width:100%}}
+
+
 .didactic-info{margin:18px auto 24px;max-width:680px;padding:16px 18px;background:#fff8e6;border:1px solid #ead7a1;border-radius:12px;text-align:left;line-height:1.5}
 .didacticExplanation{margin-top:16px;padding:16px;border-radius:12px;background:#f7f8fa;border:1px solid var(--border);line-height:1.55;white-space:pre-line}
 .didacticExplanation strong{display:block;margin-bottom:6px}
@@ -115,6 +132,7 @@ button{border:0;border-radius:10px;padding:12px 18px;font-size:15px;font-weight:
 <span id="scoreMini"></span>
 </div>
 <div class="bar"><div id="bar"></div></div>
+<div id="examSheet" class="examSheet hidden"></div>
 <div class="qnum" id="qnum"></div>
 <div class="question" id="question"></div>
 <div class="qimages" id="images"></div>
@@ -215,6 +233,7 @@ let activeQuestions=QUESTIONS;
 let order=[], pos=0, mode='standard';
 let state=[];
 let reviewPos=0;
+let examStage=0;
 
 function shuffle(a){
   const b=a.slice();
@@ -233,6 +252,9 @@ function resetScreens(){
   document.getElementById('didacticResult').classList.add('hidden');
   document.getElementById('exclusiveResult').classList.add('hidden');
   document.getElementById('didacticExplanation').classList.add('hidden');
+  document.getElementById('examSheet').classList.add('hidden');
+  const inlineReview=document.getElementById('examInlineReview');
+  if(inlineReview){inlineReview.classList.add('hidden'); inlineReview.innerHTML=''; delete inlineReview.dataset.index;}
 }
 function startTest(){
   mode='standard';
@@ -254,6 +276,7 @@ function startExam(){
   // Las 5 excluyentes van siempre primero; después aparecen las 40 normales.
   order=exclusiveIndexes.concat(normalIndexes);
   pos=0;
+  examStage=0;
   state=activeQuestions.map(()=>({selected:null,checked:false,correct:false}));
   resetScreens();
   document.getElementById('quiz').classList.remove('hidden');
@@ -286,12 +309,25 @@ function backToStart(){
   document.getElementById('didacticResult').classList.add('hidden');
   document.getElementById('exclusiveResult').classList.add('hidden');
   document.getElementById('didacticExplanation').classList.add('hidden');
+  document.getElementById('examSheet').classList.add('hidden');
+  const inlineReview=document.getElementById('examInlineReview');
+  if(inlineReview){inlineReview.classList.add('hidden'); inlineReview.innerHTML=''; delete inlineReview.dataset.index;}
   document.getElementById('start').classList.remove('hidden');
 }
 function render(){
+  if(mode==='exam'){
+    renderExamSheet();
+    return;
+  }
+
   const q=activeQuestions[order[pos]], s=state[order[pos]];
+  document.getElementById('examSheet').classList.add('hidden');
+  ['counter','scoreMini','qnum','question','images','options','feedback','didacticExplanation','prev','check'].forEach(id=>{
+    document.getElementById(id).style.display='';
+  });
+  document.getElementById('bar').parentElement.classList.remove('hidden');
   document.getElementById('counter').textContent=`Pregunta ${pos+1} de ${order.length}`;
-  document.getElementById('scoreMini').textContent=(mode==='exam')?`Aciertos: ${score()} / 45`:(mode==='didactic'||mode==='exclusive')?`Aciertos: ${score()} / 40`:`Aciertos: ${score()}`;
+  document.getElementById('scoreMini').textContent=(mode==='didactic'||mode==='exclusive')?`Aciertos: ${score()} / 40`:`Aciertos: ${score()}`;
   document.getElementById('bar').style.width=((pos+1)/order.length*100)+'%';
   document.getElementById('qnum').textContent=`${q.source} · pregunta nº ${q.sourceId}`;
   document.getElementById('question').textContent=q.question;
@@ -312,8 +348,18 @@ function render(){
     }
     const radio=document.createElement('input'); radio.type='radio'; radio.name='answer'; radio.value=i;
     radio.checked=s.selected===i;
-    radio.disabled=(mode==='standard'||mode==='didactic'||mode==='exclusive') && s.checked;
-    radio.addEventListener('change',()=>{s.selected=i; render();});
+    // En didáctico se puede cambiar una respuesta ya comprobada.
+    // Al cambiarla, la comprobación anterior deja de ser válida y debe volver a comprobarse.
+    radio.disabled=(mode==='standard'||mode==='exclusive') && s.checked;
+    radio.addEventListener('change',()=>{
+      s.selected=i;
+      if(mode==='didactic' && s.checked){
+        s.checked=false;
+        s.correct=false;
+        s.showExplanation=false;
+      }
+      render();
+    });
     const lab=document.createElement('span'); lab.className='label'; lab.textContent=op.label+')';
     const txt=document.createElement('span'); txt.textContent=op.text;
     label.append(radio,lab,txt); box.appendChild(label);
@@ -338,7 +384,6 @@ function render(){
     }
   }else{ fb.classList.add('hidden'); }
 
-  // If the user has already answered correctly, offer the explanation without revealing it.
   if((mode==='didactic'||mode==='exclusive') && s.checked && s.correct){
     const btn=document.createElement('button'); btn.className='secondary'; btn.style.marginTop='16px'; btn.textContent=s.showExplanation?'Ocultar explicación':'Ver explicación';
     btn.onclick=()=>{s.showExplanation=!s.showExplanation; render();};
@@ -347,10 +392,103 @@ function render(){
   }
 
   document.getElementById('prev').disabled=pos===0;
-  document.getElementById('check').style.display=(mode==='exam')?'none':'';
+  document.getElementById('check').style.display='';
   document.getElementById('check').disabled=s.checked || s.selected===null;
   document.getElementById('next').textContent=pos===order.length-1?'Terminar →':'Siguiente →';
 }
+
+function renderExamSheet(){
+  // Hide the single-question interface while the exam is being filled.
+  ['counter','scoreMini','qnum','question','images','options','feedback','didacticExplanation','prev','check'].forEach(id=>{
+    document.getElementById(id).style.display='none';
+  });
+  document.getElementById('bar').parentElement.classList.add('hidden');
+
+  const sheet=document.getElementById('examSheet');
+  sheet.classList.remove('hidden');
+  sheet.innerHTML='';
+
+  const start=examStage===0?0:5;
+  const end=examStage===0?5:45;
+  const title=examStage===0?'Preguntas excluyentes':'Preguntas normales';
+  const intro=examStage===0
+    ?'Contesta las 5 preguntas excluyentes. Las soluciones no se muestran durante el examen. Cuando termines, pulsa «Siguiente» para pasar a las 40 preguntas normales.'
+    :'Contesta las 40 preguntas normales. Las soluciones no se muestran durante el examen. Puedes desplazarte verticalmente por toda la hoja y cambiar tus respuestas antes de resolverlo.';
+
+  const header=document.createElement('div');
+  header.className='examSheetIntro';
+  header.innerHTML=`<div class="examSheetTitle">${title}</div>${intro}<br><span class="small">Bloque ${examStage+1} de 2 · ${end-start} preguntas</span>`;
+  sheet.appendChild(header);
+
+  const questions=document.createElement('div');
+  questions.className='examSheetQuestions';
+
+  for(let i=start;i<end;i++){
+    const idx=order[i], q=activeQuestions[idx], s=state[idx];
+    const card=document.createElement('div');
+    card.className='examSheetQuestion';
+    card.id=`examQuestion-${i}`;
+
+    const num=document.createElement('div');
+    num.className='qnum';
+    num.textContent=`Pregunta ${i+1} · ${q.source} · nº ${q.sourceId}`;
+    card.appendChild(num);
+
+    const question=document.createElement('div');
+    question.className='question';
+    question.textContent=q.question;
+    card.appendChild(question);
+
+    const imgs=document.createElement('div');
+    imgs.className='qimages';
+    (q.images||[]).forEach(src=>{
+      const im=document.createElement('img'); im.src=src; im.alt='Imagen de la pregunta'; imgs.appendChild(im);
+    });
+    card.appendChild(imgs);
+
+    const opts=document.createElement('div');
+    opts.className='options';
+    q.options.forEach((op,oi)=>{
+      const label=document.createElement('label');
+      label.className='option';
+      if(s.selected===oi) label.classList.add('selected');
+      const radio=document.createElement('input');
+      radio.type='radio';
+      radio.name=`examAnswer-${i}`;
+      radio.value=oi;
+      radio.checked=s.selected===oi;
+      radio.addEventListener('change',()=>{
+        s.selected=oi;
+        renderExamSheet();
+      });
+      const lab=document.createElement('span');
+      lab.className='label';
+      lab.textContent=op.label+')';
+      const t=document.createElement('span');
+      t.textContent=op.text;
+      label.append(radio,lab,t);
+      opts.appendChild(label);
+    });
+    card.appendChild(opts);
+    questions.appendChild(card);
+  }
+  sheet.appendChild(questions);
+
+  const actions=document.createElement('div');
+  actions.className='examSheetActions';
+  const btn=document.createElement('button');
+  btn.className='primary';
+  if(examStage===0){
+    btn.textContent='Siguiente → 40 preguntas normales';
+    btn.onclick=()=>{examStage=1; render(); window.scrollTo(0,0);};
+  }else{
+    btn.textContent='Resolver examen';
+    btn.onclick=finish;
+  }
+  actions.appendChild(btn);
+  sheet.appendChild(actions);
+}
+
 function showDidacticExplanation(){
   const q=activeQuestions[order[pos]];
   const ex=document.getElementById('didacticExplanation');
@@ -366,6 +504,8 @@ function checkAnswer(){
   if(mode!=='standard' && mode!=='didactic' && mode!=='exclusive') return;
   const q=activeQuestions[order[pos]], s=state[order[pos]];
   if(s.selected===null) return;
+  // checked/correct are overwritten, never accumulated. Rechecking the same
+  // response therefore cannot add points twice.
   s.checked=true;
   s.correct=q.options[s.selected].label===q.answer;
   s.showExplanation=false;
@@ -378,7 +518,10 @@ function nextQuestion(){
 }
 function prevQuestion(){if(pos>0){pos--;render();}}
 function score(){
-  return state.reduce((n,s)=>n+(s.checked&&s.correct?1:0),0);
+  return order.reduce((n,idx)=>{
+    const s=state[idx];
+    return n+(s.checked===true && s.correct===true ? 1 : 0);
+  },0);
 }
 function finish(){
   if(mode==='exam') finishExam();
@@ -399,16 +542,24 @@ function finishStandard(){
   document.getElementById('finalText').textContent=`Has comprobado ${done} de ${QUESTIONS.length} preguntas. Aciertos: ${correct}.`;
 }
 function finishDidactic(){
-  const correct=order.reduce((n,idx)=>n+(state[idx].correct?1:0),0);
-  const answered=order.reduce((n,idx)=>n+(state[idx].selected!==null?1:0),0);
+  // Only a checked answer can count as correct. The score is derived from the
+  // 40 questions of this attempt, so the other 822 state entries are ignored.
+  const correct=order.reduce((n,idx)=>{
+    const s=state[idx];
+    return n+(s.checked===true && s.correct===true ? 1 : 0);
+  },0);
+  const answered=order.reduce((n,idx)=>{
+    return n+(state[idx].selected!==null ? 1 : 0);
+  },0);
+  const percentage=Math.round(correct/40*100);
   document.getElementById('quiz').classList.add('hidden');
   document.getElementById('result').classList.remove('hidden');
   document.getElementById('normalResult').classList.add('hidden');
   document.getElementById('examResult').classList.add('hidden');
   document.getElementById('didacticResult').classList.remove('hidden');
   document.getElementById('exclusiveResult').classList.add('hidden');
-  document.getElementById('didacticScore').textContent=`${correct} / 40`;
-  document.getElementById('didacticText').textContent=`Has respondido ${answered} de 40 preguntas y has acertado ${correct}. En este modo has podido consultar la explicación de cada pregunta.`;
+  document.getElementById('didacticScore').textContent=`${correct} / 40 · ${percentage}%`;
+  document.getElementById('didacticText').textContent=`Has respondido ${answered} de 40 preguntas y has acertado ${correct}. El porcentaje de aciertos es del ${percentage}%. En este modo has podido consultar la explicación de cada pregunta.`;
 }
 function finishExam(){
   // The exam is corrected only here, after all 45 questions have been answered or skipped.
@@ -455,14 +606,108 @@ function renderExamGrid(){
   });
 }
 function openReview(i){
+  const container=document.getElementById('examInlineReview');
+  if(container && container.dataset.index===String(i) && !container.classList.contains('hidden')){
+    container.classList.add('hidden');
+    container.innerHTML='';
+    delete container.dataset.index;
+    return;
+  }
+
   reviewPos=i;
-  document.getElementById('result').classList.add('hidden');
-  document.getElementById('examReview').classList.remove('hidden');
-  renderReview();
+  document.getElementById('examReview').classList.add('hidden');
+  const grid=document.getElementById('examGrid');
+  let inline=document.getElementById('examInlineReview');
+  if(!inline){
+    inline=document.createElement('div');
+    inline.id='examInlineReview';
+    inline.className='examInlineReview';
+    grid.parentElement.appendChild(inline);
+  }
+  inline.dataset.index=String(i);
+  inline.classList.remove('hidden');
+  renderInlineReview();
+  inline.scrollIntoView({behavior:'smooth',block:'nearest'});
 }
+
+function renderInlineReview(){
+  const idx=order[reviewPos], q=activeQuestions[idx], s=state[idx];
+  const inline=document.getElementById('examInlineReview');
+  inline.innerHTML='';
+
+  const title=document.createElement('div');
+  title.className='reviewTitle';
+  title.textContent=`Revisión de la pregunta ${reviewPos+1} de ${order.length}`;
+  const close=document.createElement('button');
+  close.className='secondary reviewClose';
+  close.textContent='Cerrar';
+  close.onclick=()=>openReview(reviewPos);
+  title.appendChild(close);
+  inline.appendChild(title);
+
+  const meta=document.createElement('div');
+  meta.className='reviewMeta';
+  meta.textContent=`${q.source} · pregunta nº ${q.sourceId}`;
+  inline.appendChild(meta);
+
+  const question=document.createElement('div');
+  question.className='question';
+  question.textContent=q.question;
+  inline.appendChild(question);
+
+  const imgs=document.createElement('div');
+  imgs.className='qimages';
+  (q.images||[]).forEach(src=>{
+    const im=document.createElement('img'); im.src=src; im.alt='Imagen de la pregunta'; imgs.appendChild(im);
+  });
+  inline.appendChild(imgs);
+
+  const box=document.createElement('div');
+  box.className='options';
+  q.options.forEach((op,i)=>{
+    const label=document.createElement('div');
+    label.className='option';
+    if(op.label===q.answer) label.classList.add('correct');
+    if(s.selected===i && op.label!==q.answer) label.classList.add('wrong');
+    const lab=document.createElement('span'); lab.className='label'; lab.textContent=op.label+')';
+    const t=document.createElement('span'); t.textContent=op.text;
+    label.append(lab,t);
+    box.appendChild(label);
+  });
+  inline.appendChild(box);
+
+  const hint=document.createElement('div');
+  hint.className='reviewHint';
+  if(s.selected===null){
+    hint.textContent=`Sin responder. La respuesta correcta es ${q.answer}.`;
+  }else if(s.correct){
+    hint.textContent=`✓ Tu respuesta: ${q.options[s.selected].label}. Es correcta.`;
+  }else{
+    hint.textContent=`✗ Tu respuesta: ${q.options[s.selected].label}. La respuesta correcta es ${q.answer}.`;
+  }
+  inline.appendChild(hint);
+
+  const actions=document.createElement('div');
+  actions.className='reviewActions';
+  const prev=document.createElement('button');
+  prev.className='secondary';
+  prev.textContent='← Anterior';
+  prev.disabled=reviewPos===0;
+  prev.onclick=()=>{if(reviewPos>0){reviewPos--; document.getElementById('examInlineReview').dataset.index=String(reviewPos); renderInlineReview();}};
+  const next=document.createElement('button');
+  next.className='secondary';
+  next.textContent='Siguiente →';
+  next.disabled=reviewPos===order.length-1;
+  next.onclick=()=>{if(reviewPos<order.length-1){reviewPos++; document.getElementById('examInlineReview').dataset.index=String(reviewPos); renderInlineReview();}};
+  actions.append(prev,next);
+  inline.appendChild(actions);
+}
+
 function backToExamResult(){
   document.getElementById('examReview').classList.add('hidden');
   document.getElementById('result').classList.remove('hidden');
+  const inline=document.getElementById('examInlineReview');
+  if(inline){inline.classList.add('hidden'); inline.innerHTML=''; delete inline.dataset.index;}
   renderExamGrid();
 }
 function renderReview(){
