@@ -257,47 +257,110 @@ function resetScreens(){
   if(inlineReview){inlineReview.classList.add('hidden'); inlineReview.innerHTML=''; delete inlineReview.dataset.index;}
 }
 
-function isNisarc105(q){return q && q.source==='NISARC 2016' && q.sourceId===105;}
-function isNisarc106(q){return q && q.source==='NISARC 2016' && q.sourceId===106;}
 
-// La pregunta 106 depende de la 105: si se selecciona una, se incluyen ambas
-// y la 106 queda inmediatamente después de la 105.
-function shuffleIndexesKeepingNisarcPair(indexes, questions){
-  const pair105=indexes.find(i=>isNisarc105(questions[i]));
-  const pair106=indexes.find(i=>isNisarc106(questions[i]));
-  const rest=indexes.filter(i=>i!==pair105 && i!==pair106);
-  const shuffled=shuffle(rest);
-  if(pair105!==undefined && pair106!==undefined){
-    const insertAt=Math.floor(Math.random()*(shuffled.length+1));
-    shuffled.splice(insertAt,0,pair105,pair106);
-    return shuffled;
-  }
-  return shuffled;
+function isQuestion(q, source, sourceId){
+  return !!q && q.source===source && Number(q.sourceId)===sourceId;
 }
-function selectRandomIndexesKeepingNisarcPair(count, questions){
-  const pair105=questions.findIndex(isNisarc105);
-  const pair106=questions.findIndex(isNisarc106);
+function pairKey(q){
+  if(isQuestion(q,'NISARC 2016',105)||isQuestion(q,'NISARC 2016',106)) return 'NISARC_105_106';
+  if(isQuestion(q,'NICMM 2017',417)||isQuestion(q,'NICMM 2017',418)) return 'NICMM_417_418';
+  return null;
+}
+function isPairFirst(q){
+  return isQuestion(q,'NISARC 2016',105)||isQuestion(q,'NICMM 2017',417);
+}
+function isPairSecond(q){
+  return isQuestion(q,'NISARC 2016',106)||isQuestion(q,'NICMM 2017',418);
+}
+function shuffleIndexesKeepingPairs(indexes, questions){
+  const included=new Set(indexes);
   const units=[];
-  for(let i=0;i<questions.length;i++){
-    if(i===pair105 || i===pair106) continue;
-    units.push([i]);
+  const seenPairs=new Set();
+  for(const i of indexes){
+    const q=questions[i], key=pairKey(q);
+    if(key){
+      if(seenPairs.has(key)) continue;
+      seenPairs.add(key);
+      const first=indexes.find(j=>pairKey(questions[j])===key && isPairFirst(questions[j]));
+      const second=indexes.find(j=>pairKey(questions[j])===key && isPairSecond(questions[j]));
+      // If either member is present, both are required.
+      if(first!==undefined && second!==undefined && included.has(first) && included.has(second)){
+        units.push([first,second]);
+      }
+    } else {
+      units.push([i]);
+    }
   }
-  if(pair105>=0 && pair106>=0) units.push([pair105,pair106]);
-  const randomizedUnits=shuffle(units);
+  const shuffledUnits=shuffle(units);
+  return shuffledUnits.flat();
+}
+function selectCategoryUnits(questions, source, count, excludedPairKeys=[]){
+  const candidateIndexes=[];
+  for(let i=0;i<questions.length;i++){
+    const q=questions[i];
+    if(q.source!==source) continue;
+    if(excludedPairKeys.includes(pairKey(q))) continue;
+    candidateIndexes.push(i);
+  }
+  const units=[];
+  const seen=new Set();
+  for(const i of candidateIndexes){
+    const key=pairKey(questions[i]);
+    if(key){
+      if(seen.has(key)) continue;
+      seen.add(key);
+      const first=candidateIndexes.find(j=>pairKey(questions[j])===key && isPairFirst(questions[j]));
+      const second=candidateIndexes.find(j=>pairKey(questions[j])===key && isPairSecond(questions[j]));
+      if(first!==undefined && second!==undefined) units.push([first,second]);
+    } else units.push([i]);
+  }
+  const chosen=[];
+  for(const unit of shuffle(units)){
+    if(chosen.length+unit.length<=count){
+      chosen.push(...unit);
+      if(chosen.length===count) break;
+    }
+  }
+  return chosen.length===count ? chosen : null;
+}
+function selectBalancedNormalIndexes(questions){
+  // 40 preguntas: 19 NICMM + 19 NISARC + 2 de circulares.
+  // Los pares NICMM 417/418 y NISARC 105/106 se seleccionan siempre juntos.
+  const nic=selectCategoryUnits(questions,'NICMM 2017',19);
+  const nis=selectCategoryUnits(questions,'NISARC 2016',19);
+  const circularIndexes=questions.map((q,i)=>q.source==='CIRCULARES'?i:-1).filter(i=>i>=0);
+  const circulars=shuffle(circularIndexes).slice(0,2);
+  if(!nic || !nis || circulars.length!==2) throw new Error('No se pudieron seleccionar 40 preguntas equilibradas.');
+  return shuffleIndexesKeepingPairs(nic.concat(nis,circulars),questions);
+}
+function selectLinkedPairSafeIndexes(count, questions){
+  // Used for any custom-size practice set: keep both members of each pair together.
+  const groups=[];
+  const seen=new Set();
+  for(let i=0;i<questions.length;i++){
+    const key=pairKey(questions[i]);
+    if(key){
+      if(seen.has(key)) continue;
+      seen.add(key);
+      const first=questions.findIndex(q=>pairKey(q)===key && isPairFirst(q));
+      const second=questions.findIndex(q=>pairKey(q)===key && isPairSecond(q));
+      if(first>=0 && second>=0) groups.push([first,second]);
+    } else groups.push([i]);
+  }
   const selected=[];
-  for(const unit of randomizedUnits){
+  for(const unit of shuffle(groups)){
     if(selected.length+unit.length<=count){
       selected.push(...unit);
       if(selected.length===count) break;
     }
   }
-  return shuffleIndexesKeepingNisarcPair(selected, questions);
+  return shuffleIndexesKeepingPairs(selected,questions);
 }
 
 function startTest(){
   mode='standard';
   activeQuestions=randomizeAnswerOrder(BASE_QUESTIONS);
-  order=shuffleIndexesKeepingNisarcPair(activeQuestions.map((_,i)=>i),activeQuestions);
+  order=shuffleIndexesKeepingPairs(activeQuestions.map((_,i)=>i),activeQuestions);
   pos=0;
   state=activeQuestions.map(()=>({selected:null,checked:false,correct:false}));
   resetScreens();
@@ -309,9 +372,9 @@ function startExam(){
   const normalQuestions=randomizeAnswerOrder(BASE_QUESTIONS);
   const exclusiveQuestions=randomizeAnswerOrder(BASE_EXCLUSIVE,false);
   activeQuestions=normalQuestions.concat(exclusiveQuestions);
-  const normalIndexes=selectRandomIndexesKeepingNisarcPair(40,normalQuestions);
+  const normalIndexes=selectBalancedNormalIndexes(normalQuestions);
   const exclusiveIndexes=shuffle(exclusiveQuestions.map((_,i)=>normalQuestions.length+i)).slice(0,5);
-  // Las 5 excluyentes van siempre primero; después aparecen las 40 normales.
+  // Las 5 excluyentes van siempre primero; después aparecen exactamente 40 preguntas normales (19 NICMM, 19 NISARC y 2 de circulares).
   order=exclusiveIndexes.concat(normalIndexes);
   pos=0;
   examStage=0;
@@ -323,7 +386,7 @@ function startExam(){
 function startDidactic(){
   mode='didactic';
   activeQuestions=randomizeAnswerOrder(BASE_QUESTIONS);
-  order=selectRandomIndexesKeepingNisarcPair(40,activeQuestions);
+  order=selectBalancedNormalIndexes(activeQuestions);
   pos=0;
   state=activeQuestions.map(()=>({selected:null,checked:false,correct:false,showExplanation:false}));
   resetScreens();
@@ -615,7 +678,7 @@ function finishExam(){
   document.getElementById('exclusiveResult').classList.add('hidden');
   document.getElementById('examResult').classList.remove('hidden');
   document.getElementById('examScore').textContent=`${correct} / 45`;
-  document.getElementById('examText').textContent=`Has respondido ${answered} de 45 preguntas. Las preguntas 1-5 son excluyentes y las 6-45 son normales. Pulsa un número para revisar tu respuesta y la solución correcta.`;
+  document.getElementById('examText').textContent=`Has respondido ${answered} de 45 preguntas. El examen contiene exactamente 5 preguntas excluyentes y 40 preguntas normales. Las preguntas 1-5 son excluyentes y las 6-45 son normales. Pulsa un número para revisar tu respuesta y la solución correcta.`;
   renderExamGrid();
 }
 function finishExclusive(){
